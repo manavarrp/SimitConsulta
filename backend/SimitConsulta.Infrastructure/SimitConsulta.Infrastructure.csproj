@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\SimitConsulta.Application\SimitConsulta.Application.csproj" />
+    <ProjectReference Include="..\SimitConsulta.Domain\SimitConsulta.Domain.csproj" />
+  </ItemGroup>
+
 </Project>

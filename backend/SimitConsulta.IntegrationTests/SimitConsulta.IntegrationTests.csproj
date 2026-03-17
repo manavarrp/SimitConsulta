@@ -17,6 +17,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\SimitConsulta.API\SimitConsulta.API.csproj" />
+    <ProjectReference Include="..\SimitConsulta.Application\SimitConsulta.Application.csproj" />
+    <ProjectReference Include="..\SimitConsulta.Domain\SimitConsulta.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 
