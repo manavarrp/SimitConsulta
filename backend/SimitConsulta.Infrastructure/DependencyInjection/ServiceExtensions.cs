@@ -12,6 +12,7 @@ using SimitConsulta.Infrastructure.Persistence;
 using SimitConsulta.Infrastructure.Persistence.Repositories;
 using SimitConsulta.Infrastructure.Simit.Captcha;
 using SimitConsulta.Infrastructure.Simit.Client;
+using System.Net;
 
 namespace SimitConsulta.Infrastructure.DependencyInjection;
 
@@ -62,10 +63,11 @@ public static class ServiceExtensions
     /// Sin Origin y Referer el servidor rechaza la petición.
     /// </summary>
     private static void AddSimitClient(
-        this IServiceCollection services)
+     this IServiceCollection services)
     {
         services.AddHttpClient("simit", client =>
         {
+            // Headers que SÍ funcionan — verificados con Invoke-WebRequest
             client.DefaultRequestHeaders.Add(
                 "Origin", "https://www.fcm.org.co");
             client.DefaultRequestHeaders.Add(
@@ -73,16 +75,31 @@ public static class ServiceExtensions
             client.DefaultRequestHeaders.Add(
                 "Accept", "*/*");
             client.DefaultRequestHeaders.Add(
+                "Accept-Language", "es-ES,es;q=0.9");
+            client.DefaultRequestHeaders.Add(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 Chrome/120 Safari/537.36");
-            client.Timeout = TimeSpan.FromSeconds(30);
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/146.0.0.0 Safari/537.36");
+
+            // ← Eliminados: Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site
+            // ← Eliminados: sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform
+            // Esos headers hacen que el servidor bloquee la conexión
+
+            client.Timeout = TimeSpan.FromSeconds(60);
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            UseProxy = true,
+            Proxy = WebRequest.GetSystemWebProxy(),
+            UseDefaultCredentials = true,
+            ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         });
 
         services.AddScoped<ICaptchaSolver, CaptchaSolver>();
         services.AddScoped<ISimitGateway, SimitHttpClient>();
     }
-
     /// <summary>
     /// MediatR, pipeline behaviors en orden y FluentValidation.
     /// </summary>

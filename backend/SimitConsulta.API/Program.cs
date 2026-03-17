@@ -53,14 +53,15 @@ app.Run();
 
 /// <summary>
 /// Aplica migraciones EF Core con reintentos.
-/// Necesario porque SQL Server puede tardar aunque
-/// el healthcheck de Docker ya pasó.
+/// Necesario porque SQL Server en Docker puede tardar
+/// aunque el healthcheck ya pasó.
+/// CanConnectAsync() verifica la conexión antes de migrar.
 /// MigrateAsync() es idempotente — no hace nada si las tablas existen.
 /// </summary>
 static async Task ApplyMigrationsAsync(WebApplication app)
 {
     const int maxAttempts = 5;
-    const int retrySeconds = 3;
+    const int retrySeconds = 5;
 
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider
@@ -77,6 +78,9 @@ static async Task ApplyMigrationsAsync(WebApplication app)
                 "(attempt {Attempt}/{Max})...",
                 attempt, maxAttempts);
 
+            // Verificar que SQL Server está listo antes de migrar
+            await db.Database.CanConnectAsync();
+
             await db.Database.MigrateAsync();
 
             logger.LogInformation(
@@ -89,6 +93,9 @@ static async Task ApplyMigrationsAsync(WebApplication app)
                 "Migration attempt {Attempt} failed: {Msg}. " +
                 "Retrying in {Seconds}s...",
                 attempt, ex.Message, retrySeconds);
+
+            // Liberar conexión fallida antes de reintentar
+            await db.DisposeAsync();
 
             await Task.Delay(
                 TimeSpan.FromSeconds(retrySeconds));

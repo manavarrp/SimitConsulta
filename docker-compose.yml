@@ -1,0 +1,45 @@
+﻿version: '3.9'
+
+services:
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: simit-db
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD}
+      ACCEPT_EULA: "Y"
+      MSSQL_PID:   "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P \"${SA_PASSWORD}\" -No -Q \"SELECT 1\""]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    command:
+      - /bin/bash
+      - -c
+      - |
+        /opt/mssql/bin/sqlservr &
+        PID=$$!
+        echo 'Waiting for SQL Server to start...'
+        for i in $$(seq 1 30); do
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -No -Q "SELECT 1" > /dev/null 2>&1
+          if [ $$? -eq 0 ]; then
+            echo 'SQL Server ready. Creating database...'
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -No -Q "IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = 'SimitConsultaDB') BEGIN CREATE DATABASE SimitConsultaDB COLLATE Latin1_General_CI_AS; PRINT 'Database SimitConsultaDB created.'; END ELSE PRINT 'Database already exists.';"
+            echo 'Done. EF Core will create tables on API startup.'
+            break
+          fi
+          echo "Attempt $$i failed. Waiting 2s..."
+          sleep 2
+        done
+        wait $$PID
+    restart: unless-stopped
+
+volumes:
+  sqldata:
+    name: simit-sqldata

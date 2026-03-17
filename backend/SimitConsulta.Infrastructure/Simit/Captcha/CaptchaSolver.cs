@@ -1,46 +1,27 @@
-﻿using System.Text;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using SimitConsulta.Infrastructure.Utils;
 
 namespace SimitConsulta.Infrastructure.Simit.Captcha;
 
-/// <summary>
-/// Contrato interno del solver de captcha.
-/// Permite mockearlo en tests unitarios de SimitHttpClient.
-/// </summary>
 public interface ICaptchaSolver
 {
-    /// <summary>
-    /// Obtiene un token PoW válido para el body del SIMIT.
-    /// Obtiene el challenge y resuelve el Proof-of-Work.
-    /// </summary>
     Task<string> GetTokenAsync(CancellationToken ct = default);
 }
 
 /// <summary>
-/// Implementación del solver del captcha Proof-of-Work
-/// de qxcaptcha.fcm.org.co.
-///
-/// El captcha del SIMIT NO es visual — es computacional:
-/// el servidor emite un question (hash MD5) y el cliente
-/// debe encontrar un nonce tal que MD5(question+nonce)
-/// empiece con N ceros. Se resuelve en el servidor sin
-/// intervención humana.
-///
-/// Flujo:
-/// 1. POST qxcaptcha.fcm.org.co/api.php
-///    → recibe { question, recommended_difficulty }
-/// 2. HashHelper.SolvePoW() → encuentra el nonce
-/// 3. Serializa [{question, time, nonce}] como string JSON
+/// Resuelve el captcha Proof-of-Work de qxcaptcha.fcm.org.co.
+/// El servidor espera FormData con endpoint=question.
+/// Devuelve { error: false/0, data: { question, recommended_difficulty } }
 /// </summary>
 public class CaptchaSolver : ICaptchaSolver
 {
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<CaptchaSolver> _logger;
 
-    private const string CaptchaUrl =
-        "https://qxcaptcha.fcm.org.co/api.php";
+    private const string CaptchaUrl = "https://qxcaptcha.fcm.org.co/api.php";
+    private const int DefaultDifficulty = 2;
 
     public CaptchaSolver(
         IHttpClientFactory httpFactory,
@@ -50,43 +31,48 @@ public class CaptchaSolver : ICaptchaSolver
         _logger = logger;
     }
 
-    public async Task<string> GetTokenAsync(CancellationToken ct = default)
+    public async Task<string> GetTokenAsync(
+     CancellationToken ct = default)
     {
-        // Paso 1: obtener challenge del servidor de captcha
         var challenge = await GetChallengeAsync(ct);
 
-        _logger.LogDebug(
-            "Challenge received: {Question}, difficulty: {Difficulty}",
-            challenge.Question, challenge.RecommendedDifficulty);
+        var difficulty = challenge.RecommendedDifficulty > 0
+            ? challenge.RecommendedDifficulty
+            : 2;
 
-        // Paso 2: resolver Proof-of-Work
-        var nonce = HashHelper.SolvePoW(
-            challenge.Question,
-            challenge.RecommendedDifficulty);
-
-        _logger.LogDebug("PoW solved, nonce: {Nonce}", nonce);
-
-        // Paso 3: construir token en el formato exacto del SIMIT
+        // Tiempo fijo antes de resolver — igual que el navegador
         var time = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var tokenArray = new[]
-        {
-            new { question = challenge.Question, time, nonce }
-        };
 
-        return JsonHelper.Serialize(tokenArray);
+        _logger.LogDebug(
+            "Challenge: {Question}, difficulty: {Difficulty}, time: {Time}",
+            challenge.Question, difficulty, time);
+
+        // Resolver en C# — mucho más rápido que JavaScript/PowerShell
+        var token = HashHelper.SolvePoWAndBuildToken(
+            challenge.Question, time, difficulty);
+
+        _logger.LogDebug("Token built: {Token}", token);
+
+        return token;
     }
-
     private async Task<CaptchaChallenge> GetChallengeAsync(
-        CancellationToken ct)
+      CancellationToken ct)
     {
         var client = _httpFactory.CreateClient("simit");
-        var body = JsonHelper.Serialize(new { consumidor = "1" });
-        var content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        var response = await client.PostAsync(CaptchaUrl, content, ct);
+        // application/x-www-form-urlencoded — igual que Invoke-WebRequest
+        // MultipartFormDataContent no funciona con este servidor
+        var formData = new FormUrlEncodedContent(new[]
+        {
+        new KeyValuePair<string, string>("endpoint", "question")
+    });
+
+        var response = await client.PostAsync(CaptchaUrl, formData, ct);
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(ct);
+
+        _logger.LogDebug("Captcha raw response: {Json}", json);
 
         var apiResponse = JsonHelper.Deserialize<CaptchaApiResponse>(json)
             ?? throw new InvalidOperationException(
@@ -98,16 +84,24 @@ public class CaptchaSolver : ICaptchaSolver
 
         return apiResponse.Data;
     }
-
-    // ── DTOs internos — no salen de esta clase ────────────
+    // ── DTOs internos ─────────────────────────────────────
 
     private sealed class CaptchaApiResponse
     {
+        /// <summary>
+        /// El servidor puede devolver bool (false/true) o int (0/1).
+        /// JsonElement maneja ambos formatos.
+        /// </summary>
         [JsonPropertyName("error")]
-        public bool HasError { get; set; }
+        public JsonElement Error { get; set; }
 
         [JsonPropertyName("data")]
         public CaptchaChallenge? Data { get; set; }
+
+        public bool HasError =>
+            Error.ValueKind == JsonValueKind.True ||
+            (Error.ValueKind == JsonValueKind.Number &&
+             Error.GetInt32() != 0);
     }
 
     private sealed class CaptchaChallenge

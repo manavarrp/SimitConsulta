@@ -3,56 +3,92 @@ using System.Text;
 
 namespace SimitConsulta.Infrastructure.Utils;
 
-/// <summary>
-/// Utilidades de hashing para el captcha Proof-of-Work del SIMIT.
-/// Clase estática — sin estado, sin DI, resultados deterministas.
-/// Testeable directamente sin mocks.
-/// </summary>
 public static class HashHelper
 {
     /// <summary>
-    /// Calcula MD5 de un string UTF-8 y lo retorna como hex lowercase.
-    /// Ejemplo: Md5Hex("abc") → "900150983cd24fb0d6963f7d28e17f72"
+    /// SHA256 hex lowercase de un string UTF-8.
     /// </summary>
-    public static string Md5Hex(string input)
+    public static string Sha256Hex(string input)
     {
-        var bytes = MD5.HashData(Encoding.UTF8.GetBytes(input));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     /// <summary>
-    /// Resuelve el captcha Proof-of-Work del SIMIT.
-    /// Busca el nonce mínimo tal que MD5(question + nonce)
-    /// empiece con N ceros hexadecimales (difficulty).
-    /// Típicamente resuelve en menos de 5.000 iteraciones.
+    /// Verifica si un número es primo.
+    /// Usa sqrt para eficiencia — O(sqrt(n)) en lugar de O(n).
     /// </summary>
-    /// <param name="question">Hash recibido del servidor de captcha.</param>
-    /// <param name="difficulty">Ceros requeridos al inicio del hash.</param>
-    /// <param name="maxIterations">Límite para evitar bucles infinitos.</param>
-    /// <exception cref="ArgumentException">Si question es vacío.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Si difficulty fuera de 1–8.</exception>
-    /// <exception cref="InvalidOperationException">Si no hay solución en maxIterations.</exception>
-    public static long SolvePoW(
+    public static bool IsPrime(long value)
+    {
+        if (value < 2) return false;
+        if (value == 2) return true;
+        if (value % 2 == 0) return false;
+
+        var sqrt = (long)Math.Sqrt(value);
+        for (long i = 3; i <= sqrt; i += 2)
+            if (value % i == 0) return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Construye el JSON exactamente como JSON.stringify del navegador.
+    /// Orden crítico: question, time, nonce — si cambia el orden
+    /// el hash es diferente y el SIMIT rechaza el token.
+    /// </summary>
+    public static string BuildVerifyJson(
+        string question, long time, long nonce) =>
+        $"{{\"question\":\"{question}\"," +
+        $"\"time\":{time}," +
+        $"\"nonce\":{nonce}}}";
+
+    /// <summary>
+    /// Resuelve una iteración del PoW del SIMIT.
+    /// Busca el siguiente nonce primo tal que
+    /// SHA256({"question":q,"time":t,"nonce":n}) empiece con "0000".
+    /// </summary>
+    public static long SolvePoWSingle(
         string question,
-        int difficulty,
+        long time,
+        long startNonce = 1,
         long maxIterations = 10_000_000)
     {
-        if (string.IsNullOrWhiteSpace(question))
-            throw new ArgumentException(
-                "Question cannot be empty.", nameof(question));
+        for (long nonce = startNonce + 1; nonce < maxIterations; nonce++)
+        {
+            if (!IsPrime(nonce)) continue;
 
-        if (difficulty < 1 || difficulty > 8)
-            throw new ArgumentOutOfRangeException(
-                nameof(difficulty), "Difficulty must be between 1 and 8.");
+            var json = BuildVerifyJson(question, time, nonce);
+            var hash = Sha256Hex(json);
 
-        var prefix = new string('0', difficulty);
-
-        for (long nonce = 0; nonce < maxIterations; nonce++)
-            if (Md5Hex($"{question}{nonce}").StartsWith(prefix))
+            if (hash.StartsWith("0000"))
                 return nonce;
+        }
 
         throw new InvalidOperationException(
-            $"Could not solve PoW for question='{question}' " +
-            $"difficulty={difficulty} in {maxIterations:N0} iterations.");
+            $"Could not solve PoW in {maxIterations:N0} iterations.");
+    }
+
+    /// <summary>
+    /// Resuelve el PoW N veces (difficulty) y retorna el array
+    /// de objetos de verificación exactamente como el captcha-worker.js.
+    /// Orden de propiedades: question, time, nonce.
+    /// </summary>
+    public static string SolvePoWAndBuildToken(
+        string question,
+        long time,
+        int difficulty)
+    {
+        var parts = new List<string>(difficulty);
+        long lastNonce = 1;
+
+        for (int i = 0; i < difficulty; i++)
+        {
+            lastNonce = SolvePoWSingle(question, time, lastNonce);
+            // JSON manual — orden exacto igual que el worker
+            parts.Add(BuildVerifyJson(question, time, lastNonce));
+        }
+
+        // Array de objetos serializado como string
+        return "[" + string.Join(",", parts) + "]";
     }
 }

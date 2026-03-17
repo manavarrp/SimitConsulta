@@ -10,17 +10,12 @@ using SimitConsulta.Infrastructure.Utils;
 namespace SimitConsulta.Infrastructure.Simit.Client;
 
 /// <summary>
-/// Implementación de ISimitGateway que realiza llamadas HTTP al SIMIT.
+/// Implementación de ISimitGateway con llamadas HTTP al SIMIT.
 ///
-/// Flujo interno:
-/// 1. Obtener token captcha PoW via ICaptchaSolver.
-/// 2. Construir body con placa y token.
-/// 3. POST consultasimit.fcm.org.co/.../estadocuenta/consulta.
-/// 4. Deserializar respuesta a DTOs privados.
-/// 5. MapToDomain() → tipos de dominio puros (SimitResponse).
-///
-/// Los DTOs HTTP son private sealed — no se filtran fuera.
-/// Application solo ve SimitResponse, nunca los detalles del JSON.
+/// Nota importante sobre la estructura del SIMIT:
+/// El API devuelve TODOS los registros en el array "multas".
+/// El campo comparendo:true indica que es un comparendo de tránsito.
+/// El array "comparendos" siempre llega vacío.
 /// </summary>
 public class SimitHttpClient : ISimitGateway
 {
@@ -48,10 +43,8 @@ public class SimitHttpClient : ISimitGateway
         _logger.LogInformation(
             "Querying SIMIT for plate {Plate}", plate);
 
-        // Paso 1: obtener token PoW — prerrequisito obligatorio
         var captchaToken = await _captcha.GetTokenAsync(ct);
 
-        // Paso 2: construir body exacto que espera el SIMIT
         var body = JsonHelper.Serialize(new
         {
             filtro = plate,
@@ -66,7 +59,6 @@ public class SimitHttpClient : ISimitGateway
         var content = new StringContent(
             body, Encoding.UTF8, "application/json");
 
-        // Paso 3: llamar al SIMIT
         HttpResponseMessage response;
         try
         {
@@ -90,54 +82,78 @@ public class SimitHttpClient : ISimitGateway
                 (int)response.StatusCode);
         }
 
-        // Paso 4: deserializar a DTOs privados
         var json = await response.Content.ReadAsStringAsync(ct);
+
         _logger.LogDebug(
-            "SIMIT response for {Plate}: {Json}", plate, json);
+            "SIMIT response for {Plate}: {Length} chars",
+            plate, json.Length);
 
         if (!JsonHelper.TryDeserialize<SimitResponseDto>(json, out var dto)
             || dto is null)
             throw new SimitGatewayException(
                 "Could not deserialize SIMIT response.");
 
-        // Paso 5: traducir a tipos de dominio puros
         return MapToDomain(dto, json);
     }
 
     /// <summary>
-    /// Traduce el DTO HTTP privado a SimitResponse de dominio.
-    /// Después de este método el resto de la app no sabe nada de JSON.
-    /// rawJson se guarda en RawResponse para auditoría.
+    /// Traduce la respuesta del SIMIT a tipos de dominio.
+    /// El SIMIT mezcla multas y comparendos en el array "multas".
+    /// Los separamos por el campo comparendo:true/false.
     /// </summary>
-    private static SimitResponse MapToDomain(
-        SimitResponseDto dto, string rawJson) => new(
-        Fines: (dto.Fines ?? []).Select(f => new SimitFine(
-            f.FormNumber, f.AmountPaid ?? 0, f.Status,
-            f.InfractionDate, f.Agency, f.Description)).ToList(),
-        Summons: (dto.Summons ?? []).Select(s => new SimitSummons(
-            s.SummonsNumber, s.AmountPaid ?? 0, s.Status,
-            s.InfractionDate, s.Infraction)).ToList(),
-        TotalAmount: dto.TotalGeneral,
-        ClearedOfDebts: dto.PazSalvo,
-        Cancelled: dto.Cancelada,
-        Suspended: dto.Suspendida,
-        RawResponse: rawJson
-    );
+    private SimitResponse MapToDomain(
+        SimitResponseDto dto, string rawJson)
+    {
+        var allRecords = dto.Multas ?? [];
 
-    // ── DTOs privados del SIMIT ───────────────────────────
-    // JsonPropertyName usa los nombres exactos del JSON del SIMIT.
-    // Son private sealed — detalles de implementación que no salen.
+        // Separar por tipo — comparendo:false → multa, comparendo:true → comparendo
+        var fines = allRecords
+            .Where(m => !m.EsComparendo)
+            .Select(m => new SimitFine(
+                Number: m.NumeroComparendo,
+                Amount: m.ValorPagar,
+                Status: m.EstadoComparendo,
+                InfractionDate: m.FechaComparendo,
+                Agency: m.OrganismoTransito,
+                Description: m.Infracciones?
+                    .FirstOrDefault()?.DescripcionInfraccion))
+            .ToList();
+
+        var summons = allRecords
+            .Where(m => m.EsComparendo)
+            .Select(m => new SimitSummons(
+                Number: m.NumeroComparendo,
+                Amount: m.ValorPagar,
+                Status: m.EstadoComparendo,
+                InfractionDate: m.FechaComparendo,
+                Infraction: m.Infracciones?
+                    .FirstOrDefault()?.CodigoInfraccion))
+            .ToList();
+
+        // Total real = suma de valorPagar de todos los registros
+        var total = allRecords.Sum(m => m.ValorPagar);
+
+       _logger.LogInformation(
+            "SIMIT parsed: {Fines} fines, {Summons} summons, total {Total}",
+            fines.Count, summons.Count, total);
+
+        return new SimitResponse(
+            Fines: fines,
+            Summons: summons,
+            TotalAmount: total,
+            ClearedOfDebts: dto.PazSalvo,
+            Cancelled: dto.Cancelada,
+            Suspended: dto.Suspendida,
+            RawResponse: rawJson
+        );
+    }
+
+    // ── DTOs privados ─────────────────────────────────────
 
     private sealed class SimitResponseDto
     {
         [JsonPropertyName("multas")]
-        public List<SimitFineDto>? Fines { get; set; }
-
-        [JsonPropertyName("comparendos")]
-        public List<SimitSummonsDto>? Summons { get; set; }
-
-        [JsonPropertyName("totalGeneral")]
-        public decimal TotalGeneral { get; set; }
+        public List<SimitMultaDto>? Multas { get; set; }
 
         [JsonPropertyName("pazSalvo")]
         public bool PazSalvo { get; set; }
@@ -149,42 +165,41 @@ public class SimitHttpClient : ISimitGateway
         public bool Suspendida { get; set; }
     }
 
-    private sealed class SimitFineDto
+    private sealed class SimitMultaDto
     {
-        [JsonPropertyName("numeroFormulario")]
-        public string? FormNumber { get; set; }
+        /// <summary>true = comparendo de tránsito, false = multa.</summary>
+        [JsonPropertyName("comparendo")]
+        public bool EsComparendo { get; set; }
 
-        [JsonPropertyName("valorCancelado")]
-        public decimal? AmountPaid { get; set; }
+        [JsonPropertyName("numeroComparendo")]
+        public string? NumeroComparendo { get; set; }
 
-        [JsonPropertyName("estado")]
-        public string? Status { get; set; }
+        /// <summary>Valor total a pagar incluyendo intereses.</summary>
+        [JsonPropertyName("valorPagar")]
+        public decimal ValorPagar { get; set; }
 
-        [JsonPropertyName("fechaInfraccion")]
-        public string? InfractionDate { get; set; }
+        [JsonPropertyName("estadoComparendo")]
+        public string? EstadoComparendo { get; set; }
+
+        [JsonPropertyName("fechaComparendo")]
+        public string? FechaComparendo { get; set; }
 
         [JsonPropertyName("organismoTransito")]
-        public string? Agency { get; set; }
+        public string? OrganismoTransito { get; set; }
 
-        [JsonPropertyName("descripcion")]
-        public string? Description { get; set; }
+        [JsonPropertyName("infracciones")]
+        public List<InfraccionDto>? Infracciones { get; set; }
     }
 
-    private sealed class SimitSummonsDto
+    private sealed class InfraccionDto
     {
-        [JsonPropertyName("numeroComparendo")]
-        public string? SummonsNumber { get; set; }
+        [JsonPropertyName("codigoInfraccion")]
+        public string? CodigoInfraccion { get; set; }
 
-        [JsonPropertyName("valorCancelado")]
-        public decimal? AmountPaid { get; set; }
+        [JsonPropertyName("descripcionInfraccion")]
+        public string? DescripcionInfraccion { get; set; }
 
-        [JsonPropertyName("estado")]
-        public string? Status { get; set; }
-
-        [JsonPropertyName("fechaInfraccion")]
-        public string? InfractionDate { get; set; }
-
-        [JsonPropertyName("infraccion")]
-        public string? Infraction { get; set; }
+        [JsonPropertyName("valorInfraccion")]
+        public decimal ValorInfraccion { get; set; }
     }
 }
