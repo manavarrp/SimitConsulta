@@ -9,14 +9,7 @@ namespace SimitConsulta.API.Controllers;
 
 /// <summary>
 /// Controller para consulta de multas vehiculares en el SIMIT.
-///
-/// Principio Thin Controller:
-/// 1. Recibe el request HTTP.
-/// 2. Construye el Command o Query.
-/// 3. Envía a MediatR.
-/// 4. Mapea Result&lt;T&gt; al HTTP status correcto.
-///
-/// Sin lógica de negocio — toda vive en los handlers.
+/// Thin controller — solo delega a MediatR.
 /// </summary>
 [ApiController]
 [Route("api/v1")]
@@ -28,35 +21,23 @@ public class PlateQueryController : ControllerBase
     public PlateQueryController(IMediator mediator)
         => _mediator = mediator;
 
-    /// <summary>
-    /// Consulta multas y comparendos de una placa en el SIMIT.
-    /// Persiste la consulta en BD con resultado o error.
-    /// </summary>
-    /// <param name="request">Body con la placa a consultar.</param>
     [HttpPost("query")]
     [ProducesResponseType(typeof(PlateQueryDto), 200)]
     [ProducesResponseType(typeof(object), 400)]
-    [ProducesResponseType(typeof(object), 502)]
     public async Task<IActionResult> QueryPlate(
         [FromBody] QueryPlateRequest request,
         CancellationToken ct)
     {
         var result = await _mediator.Send(
-            new QueryPlateCommand(request.Plate), ct);
+            new QueryPlateCommand(
+                request.Plate,
+                request.CaptchaToken), ct);
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : BadRequest(new
-            {
-                error = true,
-                message = result.Error
-            });
+            : BadRequest(new { error = true, message = result.Error });
     }
 
-    /// <summary>
-    /// Consulta un lote de hasta 100 placas en paralelo.
-    /// Una placa fallida no detiene el lote.
-    /// </summary>
     [HttpPost("query/bulk")]
     [ProducesResponseType(typeof(BulkQueryDto), 200)]
     [ProducesResponseType(typeof(object), 400)]
@@ -65,24 +46,15 @@ public class PlateQueryController : ControllerBase
         CancellationToken ct)
     {
         var result = await _mediator.Send(
-            new BulkQueryCommand(request.Plates), ct);
+            new BulkQueryCommand(
+                request.Plates,
+                request.CaptchaToken), ct);
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : BadRequest(new
-            {
-                error = true,
-                message = result.Error
-            });
+            : BadRequest(new { error = true, message = result.Error });
     }
 
-    /// <summary>
-    /// Historial paginado de consultas realizadas.
-    /// Filtro opcional por placa.
-    /// </summary>
-    /// <param name="plate">Filtro opcional por placa (query string).</param>
-    /// <param name="page">Número de página base 1. Default: 1.</param>
-    /// <param name="pageSize">Registros por página máx 100. Default: 20.</param>
     [HttpGet("history")]
     [ProducesResponseType(typeof(HistoryDto), 200)]
     [ProducesResponseType(typeof(object), 400)]
@@ -99,17 +71,9 @@ public class PlateQueryController : ControllerBase
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : BadRequest(new
-            {
-                error = true,
-                message = result.Error
-            });
+            : BadRequest(new { error = true, message = result.Error });
     }
 
-    /// <summary>
-    /// Health check — confirma que la API está en línea.
-    /// Útil para load balancers y monitoreo.
-    /// </summary>
     [HttpGet("health")]
     public IActionResult Health() => Ok(new
     {
@@ -120,11 +84,23 @@ public class PlateQueryController : ControllerBase
 }
 
 // ── Request models ────────────────────────────────────────
-// Records simples para recibir el body del request.
-// Se mantienen aquí — son solo contenedores de entrada HTTP.
+// Records simples para deserializar el body del request HTTP.
+// Se mantienen en este archivo — son contenedores de entrada,
+// no lógica de negocio.
 
-/// <summary>Body del endpoint de consulta individual.</summary>
-public record QueryPlateRequest(string Plate);
+/// <summary>
+/// Body del endpoint POST /api/v1/query.
+/// El frontend resuelve el captcha PoW y envía el token
+/// junto con la placa a consultar.
+/// </summary>
+public record QueryPlateRequest(
+    string Plate,
+    string CaptchaToken);
 
-/// <summary>Body del endpoint de consulta masiva.</summary>
-public record BulkQueryRequest(List<string> Plates);
+/// <summary>
+/// Body del endpoint POST /api/v1/query/bulk.
+/// Un solo token captcha para todo el lote.
+/// </summary>
+public record BulkQueryRequest(
+    List<string> Plates,
+    string CaptchaToken);

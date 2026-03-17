@@ -8,11 +8,6 @@ using SimitConsulta.Domain.Models;
 
 namespace SimitConsulta.UnitTests.Application.Handlers;
 
-/// <summary>
-/// Tests del QueryPlateHandler.
-/// Mocks de IPlateQueryRepository e ISimitGateway aíslan
-/// el handler de BD y del SIMIT real.
-/// </summary>
 public class QueryPlateHandlerTests
 {
     private readonly Mock<IPlateQueryRepository> _repoMock = new();
@@ -26,7 +21,6 @@ public class QueryPlateHandlerTests
             _gatewayMock.Object,
             NullLogger<QueryPlateHandler>.Instance);
 
-        // Setup base — Add y Update no hacen nada por defecto
         _repoMock
             .Setup(r => r.AddAsync(
                 It.IsAny<PlateQuery>(),
@@ -43,38 +37,30 @@ public class QueryPlateHandlerTests
     [Fact]
     public async Task Handle_PlateWithNoRecords_ShouldReturnSinMultas()
     {
-        // Arrange — SIMIT no devuelve registros
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
-                "ABC123", It.IsAny<CancellationToken>()))
+                "ABC123",
+                It.IsAny<string>(),              // ← captchaToken
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SimitResponse(
-                Fines: [],
-                Summons: [],
-                TotalAmount: 0,
-                ClearedOfDebts: true,
-                Cancelled: false,
-                Suspended: false,
-                RawResponse: "{}"));
+                [], [], 0, true, false, false, "{}"));
 
-        // Act
         var result = await _handler.Handle(
-            new QueryPlateCommand("ABC123"),
+            new QueryPlateCommand("ABC123", "mock-token"),  // ← token
             CancellationToken.None);
 
-        // Assert
         Assert.True(result.IsSuccess);
-        Assert.Equal(
-            QueryStatus.SinMultas.ToString(),
-            result.Value!.Status);
+        Assert.Equal(QueryStatus.SinMultas.ToString(), result.Value!.Status);
     }
 
     [Fact]
     public async Task Handle_PlateWithFines_ShouldReturnExitoso()
     {
-        // Arrange — SIMIT devuelve una multa
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
-                "XYZ986", It.IsAny<CancellationToken>()))
+                "XYZ986",
+                It.IsAny<string>(),              // ← captchaToken
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SimitResponse(
                 Fines: [new SimitFine(
                     "F-001", 650_000, "Pendiente",
@@ -86,16 +72,12 @@ public class QueryPlateHandlerTests
                 Suspended: false,
                 RawResponse: "{}"));
 
-        // Act
         var result = await _handler.Handle(
-            new QueryPlateCommand("XYZ986"),
+            new QueryPlateCommand("XYZ986", "mock-token"),  // ← token
             CancellationToken.None);
 
-        // Assert
         Assert.True(result.IsSuccess);
-        Assert.Equal(
-            QueryStatus.Exitoso.ToString(),
-            result.Value!.Status);
+        Assert.Equal(QueryStatus.Exitoso.ToString(), result.Value!.Status);
         Assert.Equal(1, result.Value.FinesCount);
         Assert.Equal(650_000, result.Value.TotalAmount);
     }
@@ -103,23 +85,20 @@ public class QueryPlateHandlerTests
     [Fact]
     public async Task Handle_SimitFails_ShouldReturnFailAndPersistError()
     {
-        // Arrange — SIMIT no responde
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
                 It.IsAny<string>(),
+                It.IsAny<string>(),              // ← captchaToken
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Timeout"));
 
-        // Act
         var result = await _handler.Handle(
-            new QueryPlateCommand("ABC123"),
+            new QueryPlateCommand("ABC123", "mock-token"),  // ← token
             CancellationToken.None);
 
-        // Assert — retorna Fail sin propagar excepción
         Assert.True(result.IsFailure);
         Assert.Contains("Timeout", result.Error);
 
-        // Verifica que se persistió el error en BD
         _repoMock.Verify(r => r.UpdateAsync(
             It.Is<PlateQuery>(q => q.Status == QueryStatus.Error),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -128,17 +107,16 @@ public class QueryPlateHandlerTests
     [Fact]
     public async Task Handle_InvalidPlate_ShouldReturnFail_WithoutCallingGateway()
     {
-        // Act — placa inválida
         var result = await _handler.Handle(
-            new QueryPlateCommand("INVALIDA"),
+            new QueryPlateCommand("INVALIDA", "mock-token"),  // ← token
             CancellationToken.None);
 
-        // Assert — falla sin llamar al gateway ni al repositorio
         Assert.True(result.IsFailure);
 
         _gatewayMock.Verify(
             s => s.QueryPlateAsync(
                 It.IsAny<string>(),
+                It.IsAny<string>(),              // ← captchaToken
                 It.IsAny<CancellationToken>()),
             Times.Never);
 

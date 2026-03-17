@@ -1,4 +1,6 @@
-﻿using FluentValidation;
+﻿// ── Command ───────────────────────────────────────────────
+
+using FluentValidation;
 using MediatR;
 using Microsoft.Extensions.Logging;
 using SimitConsulta.Application.Common.Results;
@@ -8,22 +10,18 @@ using SimitConsulta.Domain.Enums;
 using SimitConsulta.Domain.ValueObjects;
 
 namespace SimitConsulta.Application.Features.PlateQueries.Commands.BulkQuery;
-
-// ── Command ───────────────────────────────────────────────
-
 /// <summary>
 /// Command para consultar un lote de placas.
-/// Acepta hasta 100 placas por solicitud.
+/// El frontend resuelve un único token captcha que se usa
+/// para todas las placas del lote.
 /// </summary>
-public record BulkQueryCommand(List<string> Plates)
+public record BulkQueryCommand(
+    List<string> Plates,
+    string CaptchaToken)
     : IRequest<Result<BulkQueryDto>>;
 
 // ── Validator ─────────────────────────────────────────────
 
-/// <summary>
-/// Valida que el lote tenga entre 1 y 100 placas
-/// y que cada una tenga formato colombiano válido.
-/// </summary>
 public class BulkQueryValidator : AbstractValidator<BulkQueryCommand>
 {
     public BulkQueryValidator()
@@ -33,6 +31,10 @@ public class BulkQueryValidator : AbstractValidator<BulkQueryCommand>
                 .WithMessage("Debe enviar al menos una placa.")
             .Must(p => p.Count <= 100)
                 .WithMessage("Máximo 100 placas por consulta masiva.");
+
+        RuleFor(x => x.CaptchaToken)
+            .NotEmpty()
+                .WithMessage("El token del captcha es obligatorio.");
 
         RuleForEach(x => x.Plates)
             .NotEmpty()
@@ -45,18 +47,11 @@ public class BulkQueryValidator : AbstractValidator<BulkQueryCommand>
 
 // ── Handler ───────────────────────────────────────────────
 
-/// <summary>
-/// Consulta un lote de placas en paralelo reutilizando QueryPlateCommand.
-/// Concurrencia limitada a 3 simultáneas con SemaphoreSlim
-/// para evitar rate limiting del SIMIT.
-/// Una placa fallida no detiene el lote — cada error queda en BD.
-/// </summary>
 public class BulkQueryHandler
     : IRequestHandler<BulkQueryCommand, Result<BulkQueryDto>>
 {
     private readonly IMediator _mediator;
     private readonly ILogger<BulkQueryHandler> _logger;
-
     private const int MaxConcurrency = 3;
 
     public BulkQueryHandler(
@@ -81,8 +76,12 @@ public class BulkQueryHandler
             await semaphore.WaitAsync(ct);
             try
             {
+                // Reutiliza el mismo token para todas las placas del lote
                 return await _mediator.Send(
-                    new QueryPlateCommand(plate, QueryType.Masiva), ct);
+                    new QueryPlateCommand(
+                        plate,
+                        request.CaptchaToken,   // ← mismo token
+                        QueryType.Masiva), ct);
             }
             finally
             {

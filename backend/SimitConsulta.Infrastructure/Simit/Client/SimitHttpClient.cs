@@ -38,20 +38,21 @@ public class SimitHttpClient : ISimitGateway
     }
 
     public async Task<SimitResponse> QueryPlateAsync(
-        string plate, CancellationToken ct = default)
+     string plate,
+     string captchaToken,          // ← recibe el token del frontend
+     CancellationToken ct = default)
     {
         _logger.LogInformation(
             "Querying SIMIT for plate {Plate}", plate);
 
-        var captchaToken = await _captcha.GetTokenAsync(ct);
-
+        // Ya no llama a _captcha.GetTokenAsync() — el token viene del frontend
         var body = JsonHelper.Serialize(new
         {
             filtro = plate,
             reCaptchaDTO = new
             {
-                consumidor = "1",
-                response = captchaToken
+                response = captchaToken,
+                consumidor = "1"
             }
         });
 

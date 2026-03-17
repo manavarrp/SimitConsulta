@@ -32,13 +32,15 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
     {
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
-                "ABC123", It.IsAny<CancellationToken>()))
+                "ABC123",
+                It.IsAny<string>(),              // ← captchaToken
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SimitResponse(
                 [], [], 0, true, false, false, "{}"));
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query",
-            new { plate = "ABC123" });
+            new { plate = "ABC123", captchaToken = "mock-token" });  // ← token
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content
@@ -52,7 +54,9 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
     {
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
-                "XYZ986", It.IsAny<CancellationToken>()))
+                "XYZ986",
+                It.IsAny<string>(),              // ← captchaToken
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SimitResponse(
                 Fines: [new SimitFine(
                     "F-001", 500_000, "Pendiente",
@@ -66,7 +70,7 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query",
-            new { plate = "XYZ986" });
+            new { plate = "XYZ986", captchaToken = "mock-token" });  // ← token
 
         var body = await response.Content
                                  .ReadFromJsonAsync<PlateQueryDto>();
@@ -81,7 +85,7 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
     {
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query",
-            new { plate = "INVALIDA" });
+            new { plate = "INVALIDA", captchaToken = "mock-token" });  // ← token
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -91,7 +95,7 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
     {
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query",
-            new { plate = "" });
+            new { plate = "", captchaToken = "mock-token" });  // ← token
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -104,13 +108,18 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
         _gatewayMock
             .Setup(s => s.QueryPlateAsync(
                 It.IsAny<string>(),
+                It.IsAny<string>(),              // ← captchaToken
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SimitResponse(
                 [], [], 0, true, false, false, "{}"));
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query/bulk",
-            new { plates = new[] { "ABC123", "XYZ986", "LMN45D" } });
+            new                                   // ← token en bulk
+            {
+                plates = new[] { "ABC123", "XYZ986", "LMN45D" },
+                captchaToken = "mock-token"
+            });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content
@@ -123,7 +132,11 @@ public class PlateQueryControllerTests : IClassFixture<ApiFactory>
     {
         var response = await _client.PostAsJsonAsync(
             "/api/v1/query/bulk",
-            new { plates = Array.Empty<string>() });
+            new
+            {
+                plates = Array.Empty<string>(),
+                captchaToken = "mock-token"        // ← token
+            });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

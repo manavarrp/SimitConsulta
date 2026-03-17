@@ -14,21 +14,21 @@ namespace SimitConsulta.Application.Features.PlateQueries.Commands.QueryPlate;
 // ── Command ───────────────────────────────────────────────
 
 /// <summary>
-/// Command CQRS para consultar las multas de una placa en el SIMIT.
-/// Record inmutable — se crea y envía, no se modifica.
-/// MediatR lo enruta automáticamente al QueryPlateHandler.
+/// Command para consultar multas de una placa.
+/// El frontend resuelve el captcha PoW y envía el token
+/// junto con la placa — el backend no necesita contactar
+/// el servidor del captcha directamente.
 /// </summary>
 public record QueryPlateCommand(
-    string    Plate,
+    string Plate,
+    string CaptchaToken,
     QueryType QueryType = QueryType.Individual)
     : IRequest<Result<PlateQueryDto>>;
 
 // ── Validator ─────────────────────────────────────────────
 
 /// <summary>
-/// Valida los datos de entrada del QueryPlateCommand.
-/// Se ejecuta automáticamente via ValidationBehavior.
-/// Delega la validación del formato al Value Object Plate.TryCreate().
+/// Valida placa y token antes de llegar al handler.
 /// </summary>
 public class QueryPlateValidator : AbstractValidator<QueryPlateCommand>
 {
@@ -41,6 +41,10 @@ public class QueryPlateValidator : AbstractValidator<QueryPlateCommand>
                 .WithMessage(cmd =>
                     $"Formato de placa inválido: '{cmd.Plate}'. " +
                     "Ejemplos: ABC123 (carro), ABC12D (moto).");
+
+        RuleFor(x => x.CaptchaToken)
+            .NotEmpty()
+                .WithMessage("El token del captcha es obligatorio.");
     }
 
     private static bool BeValidPlate(string input) =>
@@ -51,31 +55,23 @@ public class QueryPlateValidator : AbstractValidator<QueryPlateCommand>
 
 /// <summary>
 /// Orquesta el caso de uso "consultar placa en el SIMIT".
-///
-/// Flujo:
-/// 1. Crear Value Object Plate — garantiza formato válido.
-/// 2. Crear aggregate PlateQuery y persistir (estado: Procesando).
-///    Garantiza trazabilidad aunque el proceso falle después.
-/// 3. Llamar ISimitGateway — resuelve captcha PoW y consulta SIMIT.
-/// 4. Aggregate construye hijas y determina estado final.
-/// 5. Persistir resultado final.
-/// 6. Retornar Result.Ok(dto) o Result.Fail(error).
+/// El token captcha ya viene resuelto desde el frontend.
 /// </summary>
 public class QueryPlateHandler
     : IRequestHandler<QueryPlateCommand, Result<PlateQueryDto>>
 {
     private readonly IPlateQueryRepository _repo;
-    private readonly ISimitGateway         _gateway;
+    private readonly ISimitGateway _gateway;
     private readonly ILogger<QueryPlateHandler> _logger;
 
     public QueryPlateHandler(
-        IPlateQueryRepository      repo,
-        ISimitGateway              gateway,
+        IPlateQueryRepository repo,
+        ISimitGateway gateway,
         ILogger<QueryPlateHandler> logger)
     {
-        _repo    = repo;
+        _repo = repo;
         _gateway = gateway;
-        _logger  = logger;
+        _logger = logger;
     }
 
     public async Task<Result<PlateQueryDto>> Handle(
@@ -91,8 +87,11 @@ public class QueryPlateHandler
 
         try
         {
-            // 3. Consultar SIMIT
-            var response = await _gateway.QueryPlateAsync(plate.Value, ct);
+            // 3. Consultar SIMIT con el token que envió el frontend
+            var response = await _gateway.QueryPlateAsync(
+                plate.Value,
+                request.CaptchaToken,   // ← token del frontend
+                ct);
 
             // 4. Aggregate construye hijas y determina estado
             query.MarkSuccessful(
@@ -105,14 +104,16 @@ public class QueryPlateHandler
             await _repo.UpdateAsync(query, ct);
 
             _logger.LogInformation(
-                "Query successful plate {Plate}: {Fines} fines, {Summons} summons",
+                "Query successful plate {Plate}: {Fines} fines, " +
+                "{Summons} summons",
                 plate.Value, query.FinesCount, query.SummonsCount);
 
             return Result.Ok(query.ToDto());
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error querying plate {Plate}", plate.Value);
+            _logger.LogError(ex,
+                "Error querying plate {Plate}", plate.Value);
 
             query.MarkFailed(ex.Message);
             await _repo.UpdateAsync(query, ct);
