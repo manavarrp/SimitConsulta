@@ -48,18 +48,21 @@ public static class HashHelper
     /// SHA256({"question":q,"time":t,"nonce":n}) empiece con "0000".
     /// </summary>
     public static long SolvePoWSingle(
-        string question,
-        long time,
-        long startNonce = 1,
-        long maxIterations = 10_000_000)
+      string question,
+      long time,
+      long startNonce = 1,
+      long maxIterations = 10_000_000)
     {
+        // Validación que el test espera
+        if (string.IsNullOrWhiteSpace(question))
+            throw new ArgumentException(
+                "Question cannot be empty.", nameof(question));
+
         for (long nonce = startNonce + 1; nonce < maxIterations; nonce++)
         {
             if (!IsPrime(nonce)) continue;
-
             var json = BuildVerifyJson(question, time, nonce);
             var hash = Sha256Hex(json);
-
             if (hash.StartsWith("0000"))
                 return nonce;
         }

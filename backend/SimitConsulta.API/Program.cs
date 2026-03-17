@@ -32,7 +32,11 @@ var app = builder.Build();
 // Docker crea la BD vacía.
 // EF Core aplica aquí las migraciones al arrancar.
 // Con retry: SQL Server puede tardar unos segundos en estar listo.
-await ApplyMigrationsAsync(app);
+// Solo aplicar migraciones si NO es entorno de testing
+if (!app.Environment.IsEnvironment("Testing"))
+{
+    await ApplyMigrationsAsync(app);
+}
 
 // ── Pipeline HTTP ─────────────────────────────────────────
 

@@ -47,7 +47,6 @@ public class CaptchaSolver : ICaptchaSolver
             "Challenge: {Question}, difficulty: {Difficulty}, time: {Time}",
             challenge.Question, difficulty, time);
 
-        // Resolver en C# — mucho más rápido que JavaScript/PowerShell
         var token = HashHelper.SolvePoWAndBuildToken(
             challenge.Question, time, difficulty);
 
