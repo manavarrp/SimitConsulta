@@ -1,0 +1,6 @@
+@SimitConsulta.API_HostAddress = http://localhost:5229
+
+GET {{SimitConsulta.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
