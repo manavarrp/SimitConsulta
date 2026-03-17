@@ -7,12 +7,12 @@
     /// RawResponse se persiste para auditoría.
     /// </summary>
     public record SimitResponse(
-        List<SimitFine> Multas,
-        List<SimitSummons> Comparendos,
-        decimal TotalGeneral,
-        bool PazYSalvo,
-        bool Cancelada,
-        bool Suspendida,
+        List<SimitFine> Fines,
+        List<SimitSummons> Summons,
+        decimal TotalAmount,
+        bool ClearedOfDebts,
+        bool Cancelled,
+        bool Suspended,
         string RawResponse
     );
 }

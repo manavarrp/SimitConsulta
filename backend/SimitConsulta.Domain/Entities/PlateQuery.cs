@@ -1,7 +1,5 @@
 ﻿using SimitConsulta.Domain.Enums;
-using SimitConsulta.Domain.Exceptions;
 using SimitConsulta.Domain.Models;
-using SimitConsulta.Domain.ValueObjects;
 
 namespace SimitConsulta.Domain.Entities;
 
