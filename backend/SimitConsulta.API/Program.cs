@@ -8,6 +8,12 @@ using Microsoft.EntityFrameworkCore;
 // Único lugar que conoce todas las capas.
 var builder = WebApplication.CreateBuilder(args);
 
+builder.WebHost.ConfigureKestrel(opts =>
+{
+    opts.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(3);
+    opts.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(3);
+});
+
 // ── Registro de servicios ─────────────────────────────────
 
 // Un método registra Domain, Application e Infrastructure completos
@@ -19,7 +25,7 @@ builder.Services.AddSwaggerConfig();
 
 // CORS — permite llamadas desde el frontend Next.js
 builder.Services.AddCors(opts =>
-    opts.AddDefaultPolicy(policy =>
+    opts.AddPolicy("frontend", policy =>        // ← nombre explícito
         policy.WithOrigins(
                 "http://localhost:3000",
                 "https://localhost:3000")
@@ -39,7 +45,7 @@ if (!app.Environment.IsEnvironment("Testing"))
 }
 
 // ── Pipeline HTTP ─────────────────────────────────────────
-
+app.UseCors("frontend");
 // Primero — captura todas las excepciones no controladas
 app.UseMiddleware<ErrorHandlingMiddleware>();
 
@@ -47,8 +53,9 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 if (app.Environment.IsDevelopment())
     app.UseSwaggerConfig();
 
-app.UseCors();
-app.UseHttpsRedirection();
+
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.MapControllers();
 
 app.Run();

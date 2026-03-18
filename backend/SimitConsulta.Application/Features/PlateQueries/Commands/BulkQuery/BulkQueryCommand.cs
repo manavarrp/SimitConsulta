@@ -89,8 +89,11 @@ public class BulkQueryHandler
             }
         });
 
-        var results = await Task.WhenAll(tasks);
-
+        var results = new List<Result<PlateQueryDto>>();
+        foreach (var task in tasks)
+        {
+            results.Add(await task);
+        }
         var dtos = results
             .Select(r => r.IsSuccess
                 ? r.Value!

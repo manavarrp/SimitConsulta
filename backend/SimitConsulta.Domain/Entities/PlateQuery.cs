@@ -44,7 +44,7 @@ public class PlateQuery
     public static PlateQuery Create(string plate, QueryType queryType) => new()
     {
         Plate = plate,
-        ConsultedAt = DateTime.UtcNow,
+        ConsultedAt = DateTime.UtcNow.AddHours(-5),
         QueryType = queryType,
         Status = QueryStatus.Procesando
     };
